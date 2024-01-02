@@ -1,5 +1,5 @@
 import gradio as gr
-from transformers import pipeline, Conversation, AutoTokenizer, AutoModelForCausalLM
+from transformers import pipeline, Conversation
 import argparse
 model_cache = {}
 conversations = {}
