@@ -6,9 +6,7 @@ conversations = {}
 
 def load_model(model_name):
     if model_name not in model_cache:
-        tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side='left')
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        model_cache[model_name] = pipeline("conversational", model=model, tokenizer=tokenizer)
+        model_cache[model_name] = pipeline("conversational", model=model_name)
     conversations[model_name] = Conversation()
     return "Model loaded. You can now start chatting."
 
@@ -26,7 +24,7 @@ def main(share=False):
     with gr.Blocks() as demo:
         with gr.Row():
             model_selector = gr.Dropdown(
-                ["gpt2", "mistralai/Mixtral-8x7B-v0.1"],
+                ["microsoft/DialoGPT-medium", "gpt2", "mistralai/Mixtral-8x7B-v0.1"],
                 label="Model"
             )
             model_selector.change(
