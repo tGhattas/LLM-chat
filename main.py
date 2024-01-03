@@ -1,61 +1,81 @@
-import gradio as gr
-from transformers import pipeline, Conversation
 import argparse
-model_cache = {}
-conversations = {}
+from huggingface_hub import InferenceClient
+import gradio as gr
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-def load_model(model_name):
-    if model_name not in model_cache:
-        model_cache[model_name] = pipeline("conversational", model=model_name)
-    conversations[model_name] = Conversation()
-    return "Model loaded. You can now start chatting."
+DEFAULT_MODEL_ID = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
-def chat_with_model(model_name, user_input, temperature, max_length):
-    if model_name in model_cache:
-        chat = model_cache[model_name]
-        conversation = conversations[model_name]
-        conversation.add_user_input(user_input)
-        response = chat(conversation, temperature=temperature, max_length=max_length)
-        return str(conversation)
-    else:
-        return "Model is still loading. Please wait."
+
+def format_prompt(message, history):
+    prompt = "<s>"
+    for user_prompt, bot_response in history:
+        prompt += f"[INST] {user_prompt} [/INST]"
+        prompt += f" {bot_response}</s> "
+    prompt += f"[INST] {message} [/INST]"
+    return prompt
+
+
+def generate(
+        prompt, history, temperature=0.2, max_new_tokens=256, top_p=0.95, repetition_penalty=1.0
+):
+    global model_id, is_offline
+    temperature = float(temperature)
+    if temperature < 1e-2:
+        temperature = 1e-2
+    top_p = float(top_p)
+
+    generate_kwargs = dict(
+        temperature=temperature,
+        max_new_tokens=max_new_tokens,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        do_sample=True,
+        seed=42,
+    )
+
+    formatted_prompt = format_prompt(prompt, history)
+    if is_offline:
+        # offline mode
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        input_ids = tokenizer.encode(formatted_prompt, return_tensors="pt")
+        output = model.generate(input_ids, **generate_kwargs)
+        yield tokenizer.decode(output[0], skip_special_tokens=True)
+
+    client = InferenceClient(model_id)
+    stream = client.text_generation(formatted_prompt, **generate_kwargs, stream=True, details=True,
+                                    return_full_text=False)
+    output = ""
+
+    for response in stream:
+        output += response.token.text
+        yield output
+    return output
+
 
 def main(share=False):
-    with gr.Blocks() as demo:
-        with gr.Row():
-            model_selector = gr.Dropdown(
-                ["microsoft/DialoGPT-medium", "gpt2", "mistralai/Mixtral-8x7B-v0.1"],
-                label="Model"
-            )
-            model_selector.change(
-                fn=load_model,
-                inputs=model_selector,
-                outputs=[]
-            )
-            # default slider value is 0.7
-            temperature = gr.Slider(minimum=0.1, maximum=1.0, step=0.1, label="Temperature", value=0.7)
-            max_length = gr.Slider(minimum=5, maximum=100, step=1, label="Max Length", value=20)
-        with gr.Row():
-            # named textbox
-            chat_output = gr.Textbox(interactive=False, lines=10, placeholder="Chat will appear here...", label="Chat")
-        with gr.Row():
-            user_input = gr.Textbox(lines=2, placeholder="Enter your message here...", scale=4)
-            submit_button = gr.Button("Send")
+    mychatbot = gr.Chatbot(
+        # avatar_images=["./user.png", "./botm.png"],
+        bubble_full_width=False, show_label=False, show_copy_button=True,
+        likeable=True, )
 
-        def update_chat(model_name, user_input, temperature, max_length):
-            new_chat = chat_with_model(model_name, user_input, temperature, max_length)
-            return new_chat, ""  # Return new chat content and clear the input box
+    demo = gr.ChatInterface(fn=generate,
+                            chatbot=mychatbot,
+                            title=f"Vanilla Chat - {model_id}",
+                            retry_btn=None,
+                            undo_btn=None
+                            )
 
-        submit_button.click(
-            fn=update_chat,
-            inputs=[model_selector, user_input, temperature, max_length],
-            outputs=[chat_output, user_input]
-        )
+    demo.queue().launch(show_api=False, share=share)
 
-    demo.launch(share=True)
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--share", action="store_true")
+    arg_parser.add_argument("--model_id", type=str, default=DEFAULT_MODEL_ID)
+    arg_parser.add_argument("--offline", action="store_true")
+
     args = arg_parser.parse_args()
+    model_id = args.model_id
+    is_offline = args.offline
     main(share=args.share)
