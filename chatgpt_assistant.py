@@ -1,80 +1,173 @@
+import json
 import os
+import time
+from pprint import pprint
 import requests
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
+from openai import OpenAI, AsyncClient
+import asyncio
 
 # Environment variables for API keys and URLs
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+if os.path.exists('OPENAI_KEY'):
+    OPENAI_API_KEY = open('OPENAI_KEY').read().strip()
+else:
+    OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 SMART_R_API_URL = os.environ.get('SMART_R_API_URL')
 SMART_R_API_KEY = os.environ.get('SMART_R_API_KEY')
 
-
-ASSISTANT_CHARACHTER = f"""
+ASSISTANT_INSTRUCTIONS = f"""
 You are a knowledgeable chatbot, here to help with questions of the user. Your tone should be professional and informative.
 Don't answer with too much detail and introduction. Just answer the question.
 You are an assistant to control the water heater.
 in case you were asked in any question to turn on or off the water heater, you should answer with the action.
-if asked to turn on the water heater, you should answer with "<ACTION>turn on</ACTION>".
-if asked to turn off the water heater, you should answer with "<ACTION>turn off</ACTION>".
+if asked to turn on the water heater, you should call turn_on_water_heater().
+if asked to turn off the water heater, you should turn_off_water_heater().
 don't answer with any other action. don't answer with any other text. and don't answer with this text to any other question.
 """.strip()
 
-ON_SUBTEXT = "<ACTION>turn on</ACTION> the water heater"
-OFF_SUBTEXT = "<ACTION>turn off</ACTION> the water heater"
+
+async def init_assistant():
+    openai_client = AsyncClient(
+        api_key=OPENAI_API_KEY,
+    )
+    await openai_client.beta.assistants.create(
+        name="Smart home control assistant",
+        instructions=ASSISTANT_INSTRUCTIONS,
+        model="gpt-4-turbo-preview",
+        tools=[{
+            "type": "function",
+            "function": {
+                "name": "turn_on_water_heater",
+                "description": "Request to smart home controller to turn on the water heater",
+                "parameters": {}
+            }
+        }, {
+            "type": "function",
+            "function": {
+                "name": "turn_off_water_heater",
+                "description": "Request to smart home controller to turn off the water heater",
+                "parameters": {}
+            }
+        }]
+    )
 
 
-def query_openai(prompt):
+def turn_on_water_heater():
+    print("Water heater turned on...")
+    pass
+
+
+def turn_off_water_heater():
+    print("Water heater turned off...")
+    pass
+
+
+client = init_assistant()
+requires_action_queue = []
+in_progress_queue = []
+
+
+async def query_openai(prompt):
+    global client
+    thread = await client.beta.threads.create()
     try:
-        response = requests.post(
-            'https://api.openai.com/v1/engines/davinci-codex/completions',
-            headers={'Authorization': f'Bearer {OPENAI_API_KEY}'},
-            json={'prompt': prompt, 'max_tokens': 50}
+        await client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=prompt
         )
-        response.raise_for_status()
-        return response.json()['choices'][0]['text'].strip()
+        run = await client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=client.id,
+            instructions="Please address the user as Jane Doe. The user has a premium account."
+        )
+        in_progress_queue.append((thread.id, run.id))
     except requests.RequestException as e:
         print(f"Error querying OpenAI: {e}")
         return None
 
 
-@app.route('/control-water-heater', methods=['POST'])
-def control_water_heater():
-    user_input = request.json.get('input')
-    ai_response = query_openai(user_input)
-    if not ai_response:
-        return jsonify({'error': 'Failed to get response from AI'}), 500
+async def interpret_ai_response():
+    global client, in_progress_queue, requires_action_queue
 
-    action = interpret_ai_response(ai_response)
-    if action:
-        success = execute_smart_r_command(action)
-        if not success:
-            return jsonify({'error': 'Failed to execute action on SMART-R device'}), 500
+    while len(in_progress_queue):
+        thread_id, run_id = in_progress_queue.pop(0)
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread_id,
+            run_id=run_id
+        )
+        if run is None:
+            print(f"Run {run_id} not found")
+            continue
+        run_dict = json.loads(run)
+        assert run_dict['id'] == run_id
+        status = run_dict['status']
+        if status == 'requires_action':
+            requires_action_queue.append((thread_id, run_id))
+        elif status in ['pending', 'in_progress', 'queued', 'cancelling', 'cancelled', 'failed', 'expired']:
+            in_progress_queue.append((thread_id, run_id))
+            if status in ['cancelling', 'cancelled', 'failed']:
+                pprint(f"Run failed: {run_dict} - queuing again")
+        yield run_dict
 
-    return jsonify({'ai_response': ai_response, 'action_executed': action})
-
-
-def interpret_ai_response(response):
-    if "turn on" in response:
-        return "on"
-    elif "turn off" in response:
-        return "off"
-    return None
 
 
 def execute_smart_r_command(command):
     try:
-        response = requests.post(
-            f'{SMART_R_API_URL}/command',
-            headers={'Authorization': f'Bearer {SMART_R_API_KEY}'},
-            json={'command': command}
-        )
-        response.raise_for_status()
+        # response = requests.post(
+        #     f'{SMART_R_API_URL}/command',
+        #     headers={'Authorization': f'Bearer {SMART_R_API_KEY}'},
+        #     json={'command': command}
+        # )
+        # response.raise_for_status()
+        # only log for now
+        print(f"SMART-R command executed: {command}")
         return True
     except requests.RequestException as e:
         print(f"Error sending command to SMART-R: {e}")
         return False
 
 
+async def main():
+    global client, requires_action_queue
+    await client
+    await asyncio.sleep(1)
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+    await query_openai("Turn on the water heater")
+    await query_openai("Turn off the water heater")
+
+    async for run_dict in interpret_ai_response():
+        pprint(run_dict)
+        if run_dict['status'] == 'requires_action':
+            required_action = run_dict['required_action']
+            if required_action['type'] == 'submit_tool_outputs':
+                for tool_call in required_action['submit_tool_outputs']['tool_calls']:
+                    if tool_call['function']['name'] == 'turn_on_water_heater':
+                        execute_smart_r_command('turn_on_water_heater')
+                    elif tool_call['function']['name'] == 'turn_off_water_heater':
+                        execute_smart_r_command('turn_off_water_heater')
+                    else:
+                        print(f"Unknown tool call: {tool_call['function']['name']}")
+            else:
+                print(f"Unknown action type: {required_action['type']}")
+        elif run_dict['status'] == 'completed':
+            print("Run completed")
+        else:
+            print(f"Unknown run status: {run_dict['status']}")
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    asyncio.run(main())
