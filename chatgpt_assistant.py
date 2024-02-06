@@ -24,12 +24,14 @@ if asked to turn off the water heater, you should turn_off_water_heater().
 don't answer with any other action. don't answer with any other text. and don't answer with this text to any other question.
 """.strip()
 
+client = AsyncClient(
+    api_key=OPENAI_API_KEY,
+)
 
-async def init_assistant():
-    openai_client = AsyncClient(
-        api_key=OPENAI_API_KEY,
-    )
-    await openai_client.beta.assistants.create(
+
+async def init_assistant():  # TODO cache
+    global client
+    assistant = await client.beta.assistants.create(
         name="Smart home control assistant",
         instructions=ASSISTANT_INSTRUCTIONS,
         model="gpt-4-turbo-preview",
@@ -49,6 +51,7 @@ async def init_assistant():
             }
         }]
     )
+    return assistant
 
 
 def turn_on_water_heater():
@@ -61,13 +64,13 @@ def turn_off_water_heater():
     pass
 
 
-client = init_assistant()
 requires_action_queue = []
 in_progress_queue = []
 
 
 async def query_openai(prompt):
     global client
+    assistant = await init_assistant()
     thread = await client.beta.threads.create()
     try:
         await client.beta.threads.messages.create(
@@ -77,7 +80,7 @@ async def query_openai(prompt):
         )
         run = await client.beta.threads.runs.create(
             thread_id=thread.id,
-            assistant_id=client.id,
+            assistant_id=assistant.id,
             instructions="Please address the user as Jane Doe. The user has a premium account."
         )
         in_progress_queue.append((thread.id, run.id))
@@ -87,8 +90,7 @@ async def query_openai(prompt):
 
 
 async def interpret_ai_response():
-    global client, in_progress_queue, requires_action_queue
-
+    global in_progress_queue, requires_action_queue, client
     while len(in_progress_queue):
         thread_id, run_id = in_progress_queue.pop(0)
         run = client.beta.threads.runs.retrieve(
@@ -110,7 +112,6 @@ async def interpret_ai_response():
         yield run_dict
 
 
-
 def execute_smart_r_command(command):
     try:
         # response = requests.post(
@@ -128,8 +129,7 @@ def execute_smart_r_command(command):
 
 
 async def main():
-    global client, requires_action_queue
-    await client
+    global requires_action_queue
     await asyncio.sleep(1)
     await query_openai("Turn on the water heater")
     await query_openai("Turn off the water heater")
@@ -168,6 +168,7 @@ async def main():
             print("Run completed")
         else:
             print(f"Unknown run status: {run_dict['status']}")
+
 
 if __name__ == '__main__':
     asyncio.run(main())
