@@ -100,6 +100,7 @@ async def interpret_ai_response():
         if run is None:
             print(f"Run {run_id} not found")
             continue
+
         run_dict = json.loads(run)
         assert run_dict['id'] == run_id
         status = run_dict['status']
