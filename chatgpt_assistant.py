@@ -1,9 +1,9 @@
-import json
 import os
-import time
 from pprint import pprint
 import requests
-from openai import OpenAI, AsyncClient
+from openai import AsyncClient
+from openai.types.beta import Assistant
+from openai.types.beta.threads import Run
 import asyncio
 
 # Environment variables for API keys and URLs
@@ -29,7 +29,7 @@ client = AsyncClient(
 )
 
 
-async def init_assistant():  # TODO cache
+async def init_assistant() -> Assistant:
     global client
     assistant = await client.beta.assistants.create(
         name="Smart home control assistant",
@@ -89,39 +89,31 @@ async def query_openai(prompt):
         return None
 
 
-async def interpret_ai_response():
+async def interpret_ai_response() -> Run:
     global in_progress_queue, requires_action_queue, client
     while len(in_progress_queue):
         thread_id, run_id = in_progress_queue.pop(0)
-        run = client.beta.threads.runs.retrieve(
+        result = await client.beta.threads.runs.retrieve(
             thread_id=thread_id,
             run_id=run_id
         )
-        if run is None:
+        if result is None:
             print(f"Run {run_id} not found")
             continue
 
-        run_dict = json.loads(run)
-        assert run_dict['id'] == run_id
-        status = run_dict['status']
+        assert result.id == run_id
+        status = result.status
         if status == 'requires_action':
             requires_action_queue.append((thread_id, run_id))
-        elif status in ['pending', 'in_progress', 'queued', 'cancelling', 'cancelled', 'failed', 'expired']:
+        elif status in ['pending', 'in_progress', 'queued']:
             in_progress_queue.append((thread_id, run_id))
-            if status in ['cancelling', 'cancelled', 'failed']:
-                pprint(f"Run failed: {run_dict} - queuing again")
-        yield run_dict
+            if status in ['cancelling', 'cancelled', 'failed', 'expired']:
+                pprint(f"Run failed: {result} - queuing again")
+        yield result
 
 
-def execute_smart_r_command(command):
+def execute_smart_r_command(command) -> bool:
     try:
-        # response = requests.post(
-        #     f'{SMART_R_API_URL}/command',
-        #     headers={'Authorization': f'Bearer {SMART_R_API_KEY}'},
-        #     json={'command': command}
-        # )
-        # response.raise_for_status()
-        # only log for now
         print(f"SMART-R command executed: {command}")
         return True
     except requests.RequestException as e:
@@ -136,39 +128,27 @@ async def main():
     await query_openai("Turn off the water heater")
     await query_openai("Turn on the water heater")
     await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
-    await query_openai("Turn on the water heater")
-    await query_openai("Turn off the water heater")
 
-    async for run_dict in interpret_ai_response():
-        pprint(run_dict)
-        if run_dict['status'] == 'requires_action':
-            required_action = run_dict['required_action']
-            if required_action['type'] == 'submit_tool_outputs':
-                for tool_call in required_action['submit_tool_outputs']['tool_calls']:
-                    if tool_call['function']['name'] == 'turn_on_water_heater':
+    async for run_result in interpret_ai_response():
+        pprint(run_result)
+        if run_result.status == 'requires_action':
+            required_action = run_result.required_action
+            if required_action.type == 'submit_tool_outputs':
+                for tool_call in required_action.submit_tool_outputs.tool_calls:
+                    if tool_call.function.name == 'turn_on_water_heater':
                         execute_smart_r_command('turn_on_water_heater')
-                    elif tool_call['function']['name'] == 'turn_off_water_heater':
+                    elif tool_call.function.name == 'turn_off_water_heater':
                         execute_smart_r_command('turn_off_water_heater')
                     else:
-                        print(f"Unknown tool call: {tool_call['function']['name']}")
+                        print(f"Unknown tool call: {tool_call.function.name}")
             else:
-                print(f"Unknown action type: {required_action['type']}")
-        elif run_dict['status'] == 'completed':
+                print(f"Unknown action type: {required_action.type}")
+        elif run_result.status in ['pending', 'in_progress', 'queued']:
+            print(f"Run still in progress: {run_result.status}")
+        elif run_result.status == 'completed':
             print("Run completed")
         else:
-            print(f"Unknown run status: {run_dict['status']}")
+            print(f"Unknown run status: {run_result.status}")
 
 
 if __name__ == '__main__':
