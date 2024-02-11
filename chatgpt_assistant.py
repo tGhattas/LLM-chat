@@ -124,10 +124,15 @@ def execute_smart_r_command(command) -> bool:
 async def main():
     global requires_action_queue
     await asyncio.sleep(1)
+
     await query_openai("Turn on the water heater")
     await query_openai("Turn off the water heater")
     await query_openai("Turn on the water heater")
     await query_openai("Turn off the water heater")
+
+    # as a sanity check the following queries will not be answered by the assistant
+    await query_openai("Don't turn on the water heater")
+    await query_openai("How is the weather like today?")
 
     async for run_result in interpret_ai_response():
         pprint(run_result)

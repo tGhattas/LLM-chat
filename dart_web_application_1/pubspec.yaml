@@ -9,6 +9,9 @@ environment:
 # Add regular dependencies here.
 dependencies:
   # path: ^1.8.0
+  intl: ^0.17.0 # For internationalization support
+  shared_preferences: ^2.0.6 # To store language preference locally
+  cupertino_icons: ^1.0.2 # Cupertino icons used in iOS devices
 
 dev_dependencies:
   build_runner: ^2.4.0
