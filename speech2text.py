@@ -1,4 +1,4 @@
-from transformers import AutoProcessor, SeamlessM4Tv2Model
+from transformers import AutoProcessor, SeamlessM4Tv2Model, SeamlessM4TForSpeechToText
 import sounddevice as sd
 import numpy as np
 from datasets import load_dataset
@@ -10,19 +10,21 @@ def play_audio(audio_array: np.ndarray, sampling_rate: int):
 
 
 def speech_to_text(audio: np.ndarray) -> str:
-    audio_inputs = processor(audios=audio, return_tensors="pt", padding="longest")
+    model = SeamlessM4TForSpeechToText.from_pretrained("facebook/seamless-m4t-v2-large")
+    print(f"Model sampling rate: {model.config.sampling_rate}")
+    processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
+    play_audio(audio, model.config.sampling_rate)
+    audio_inputs = processor(audios=audio, return_tensors="pt", padding="longest",
+                             sampling_rate=model.config.sampling_rate)
     output_tokens = model.generate(**audio_inputs, tgt_lang="eng")
-    transcription = processor.decode(output_tokens, skip_special_tokens=True)
+    transcription = processor.decode(output_tokens[0].tolist()[0], skip_special_tokens=True)
     return transcription
 
 
-processor = AutoProcessor.from_pretrained("facebook/seamless-m4t-v2-large")
-model = SeamlessM4Tv2Model.from_pretrained("facebook/seamless-m4t-v2-large")
+if __name__ == "__main__":
+    # dataset = load_dataset("arabic_speech_corpus", split="test", streaming=True)
+    # english audio dataset with 16k sampling rate
+    dataset = load_dataset("google/fleurs", "en_us", split='test', streaming=True)
+    audio_sample = next(iter(dataset))['audio']
 
-dataset = load_dataset("arabic_speech_corpus", split="test", streaming=True)
-audio_sample = next(iter(dataset))["audio"]
-
-audio_inputs = processor(audios=audio_sample["array"], return_tensors="pt", sampling_rate=16000)
-audio_array_from_audio = model.generate(**audio_inputs, tgt_lang="eng")[0].cpu().numpy().squeeze()
-# play_audio(audio_array_from_audio, 16000)
-print(speech_to_text(audio_sample["array"]))
+    print(speech_to_text(audio_sample["array"]))
