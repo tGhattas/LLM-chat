@@ -17,7 +17,7 @@ def speech_to_text(audio: np.ndarray) -> str:
     audio_inputs = processor(audios=audio, return_tensors="pt", padding="longest",
                              sampling_rate=model.config.sampling_rate)
     output_tokens = model.generate(**audio_inputs, tgt_lang="eng")
-    transcription = processor.decode(output_tokens[0].tolist()[0], skip_special_tokens=True)
+    transcription = processor.decode(output_tokens[0].tolist(), skip_special_tokens=True)
     return transcription
 
 
